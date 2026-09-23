@@ -1,23 +1,48 @@
-# Rust Herdr Plugin Guide
+# Rust & Ratatui Herdr Plugin Architecture
 
-Rust is the ideal language for Herdr plugins when you want high performance, zero runtime dependencies, or standalone binary distribution.
+Herdr plugins MUST be written in Rust using Ratatui for terminal interfaces and popups.
 
-## 1. Directory Structure
+## 1. Mandatory MCP Knowledge Base Rule
+
+Before writing or editing any Ratatui code, consult the local Knowledge Base:
+- Tool: `knowledge_base_kb_search`
+- Collection: `"ratatui"`
+- Never use hallucinated or obsolete APIs (e.g. outdated layout constraints or border builders). Verify via `kb_search` and `kb_read_source`.
+
+## 2. Directory Structure
 
 ```text
-my-rust-plugin/
+my-herdr-plugin/
 ├── herdr-plugin.toml
 ├── Cargo.toml
 └── src/
     ├── main.rs
-    └── herdr.rs
+    ├── herdr.rs
+    └── ui/
+        ├── mod.rs
+        └── popup.rs
 ```
 
-## 2. Manifest (`herdr-plugin.toml`)
+## 3. Recommended `Cargo.toml` Dependencies
 
 ```toml
-id = "acme.fast-tools"
-name = "Fast Tools"
+[package]
+name = "my-herdr-plugin"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+ratatui = { version = "0.30", features = ["all-widgets"] }
+crossterm = { version = "0.28", features = ["event-stream"] }
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+```
+
+## 4. Manifest Pattern with Popup Pane (`herdr-plugin.toml`)
+
+```toml
+id = "acme.agent-dashboard"
+name = "Agent Dashboard"
 version = "0.1.0"
 min_herdr_version = "0.7.0"
 platforms = ["linux", "macos", "windows"]
@@ -26,108 +51,64 @@ platforms = ["linux", "macos", "windows"]
 command = ["cargo", "build", "--release"]
 
 [[actions]]
-id = "split-bench"
-title = "Split Benchmark Pane"
-command = ["target/release/fast-tools", "action", "split-bench"]
+id = "open-dashboard"
+title = "Open Agent Dashboard"
+contexts = ["workspace"]
+command = ["target/release/my_herdr_plugin", "action"]
 
 [[panes]]
-id = "stats"
-title = "Live Stats"
+id = "dashboard-popup"
+title = "Agent Dashboard"
 placement = "popup"
 width = "80%"
 height = 24
-command = ["target/release/fast-tools", "pane", "stats"]
+command = ["target/release/my_herdr_plugin", "popup"]
 ```
 
-## 3. Cargo Configuration (`Cargo.toml`)
-
-```toml
-[package]
-name = "fast-tools"
-version = "0.1.0"
-edition = "2021"
-
-[dependencies]
-serde = { version = "1.0", features = ["derive"] }
-serde_json = "1.0"
-```
-
-## 4. Helper Module (`src/herdr.rs`)
+## 5. Typical Ratatui Popup Implementation Pattern
 
 ```rust
-use std::env;
-use std::process::Command;
-use serde::{Deserialize, Serialize};
+use crossterm::{
+    event::{self, Event, KeyCode},
+    execute,
+    terminal::{disable_raw_mode, enable_raw_mode, EnterAlternateScreen, LeaveAlternateScreen},
+};
+use ratatui::{
+    backend::CrosstermBackend,
+    layout::{Constraint, Layout, Rect},
+    style::{Color, Modifier, Style, Stylize},
+    widgets::{Block, Borders, Clear, Paragraph},
+    Terminal,
+};
+use std::io::{self, stdout};
 
-#[derive(Debug, Deserialize, Serialize, Default)]
-pub struct HerdrContext {
-    pub workspace_id: Option<String>,
-    pub tab_id: Option<String>,
-    pub pane_id: Option<String>,
-    pub invocation_source: Option<String>,
-}
+pub fn run_popup() -> io::Result<()> {
+    enable_raw_mode()?;
+    let mut stdout = stdout();
+    execute!(stdout, EnterAlternateScreen)?;
+    let backend = CrosstermBackend::new(stdout);
+    let mut terminal = Terminal::new(backend)?;
 
-pub struct HerdrClient {
-    bin_path: String,
-}
+    loop {
+        terminal.draw(|f| {
+            let area = f.area();
+            let block = Block::bordered()
+                .title(" Herdr Agent Dashboard (q to quit) ")
+                .border_style(Style::default().fg(Color::Cyan));
+            f.render_widget(Clear, area); // Clean terminal under popup
+            f.render_widget(block, area);
+        })?;
 
-impl HerdrClient {
-    pub fn new() -> Self {
-        let bin_path = env::var("HERDR_BIN_PATH").unwrap_or_else(|_| "herdr".to_string());
-        Self { bin_path }
-    }
-
-    pub fn context() -> HerdrContext {
-        match env::var("HERDR_PLUGIN_CONTEXT_JSON") {
-            Ok(json_str) => serde_json::from_str(&json_str).unwrap_or_default(),
-            Err(_) => HerdrContext::default(),
+        if let Event::Key(key) = event::read()? {
+            if key.code == KeyCode::Char('q') || key.code == KeyCode::Esc {
+                break;
+            }
         }
     }
 
-    pub fn run_json(&self, args: &[&str]) -> Result<serde_json::Value, String> {
-        let mut cmd = Command::new(&self.bin_path);
-        cmd.args(args);
-        cmd.arg("--json");
-
-        let output = cmd.output().map_err(|e| e.to_string())?;
-        if !output.status.success() {
-            let stderr = String::from_utf8_lossy(&output.stderr);
-            return Err(format!("Command failed: {stderr}"));
-        }
-
-        let stdout = String::from_utf8_lossy(&output.stdout);
-        serde_json::from_str(&stdout).map_err(|e| format!("JSON decode error: {e}"))
-    }
-
-    pub fn notify(&self, title: &str, body: Option<&str>) -> Result<(), String> {
-        let mut args = vec!["notification", "show", title];
-        if let Some(b) = body {
-            args.push("--body");
-            args.push(b);
-        }
-        self.run_json(&args).map(|_| ())
-    }
-}
-```
-
-## 5. Main Entrypoint (`src/main.rs`)
-
-```rust
-mod herdr;
-
-use herdr::HerdrClient;
-use std::env;
-
-fn main() {
-    let args: Vec<String> = env::args().collect();
-    let herdr = HerdrClient::new();
-    let ctx = HerdrClient::context();
-
-    if args.len() >= 3 && args[1] == "action" && args[2] == "split-bench" {
-        println!("Invoked from pane: {:?}", ctx.pane_id);
-        let _ = herdr.notify("Rust Plugin Action", Some("Action split-bench executed."));
-    } else {
-        println!("Usage: fast-tools <action|pane> <id>");
-    }
+    disable_raw_mode()?;
+    execute!(terminal.backend_mut(), LeaveAlternateScreen)?;
+    terminal.show_cursor()?;
+    Ok(())
 }
 ```

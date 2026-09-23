@@ -147,6 +147,8 @@ version = "0.1.0"
 edition = "2021"
 
 [dependencies]
+ratatui = { version = "0.30", features = ["all-widgets"] }
+crossterm = { version = "0.28", features = ["event-stream"] }
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
 `;
@@ -156,18 +158,66 @@ serde_json = "1.0"
   const srcDir = path.join(dir, "src");
   fs.mkdirSync(srcDir, { recursive: true });
 
-  const mainRs = `use std::env;
+  const mainRs = `use crossterm::{
+    event::{self, Event, KeyCode},
+    execute,
+    terminal::{disable_raw_mode, enable_raw_mode, EnterAlternateScreen, LeaveAlternateScreen},
+};
+use ratatui::{
+    backend::CrosstermBackend,
+    style::{Color, Style},
+    widgets::{Block, Clear, Paragraph},
+    Terminal,
+};
+use std::env;
+use std::io::{self, stdout};
 use std::process::Command;
 
-fn main() {
+fn main() -> io::Result<()> {
+    let args: Vec<String> = env::args().collect();
+    let mode = args.get(1).map(|s| s.as_str()).unwrap_or("popup");
+
     let herdr_bin = env::var("HERDR_BIN_PATH").unwrap_or_else(|_| "herdr".to_string());
     let pane_id = env::var("HERDR_PANE_ID").unwrap_or_else(|_| "unknown".to_string());
 
-    println!("Rust plugin invoked from pane: {}", pane_id);
+    if mode == "action" {
+        let _ = Command::new(herdr_bin)
+            .args(["notification", "show", "${opts.name}", "--body", &format!("Action from {}", pane_id)])
+            .status();
+        return Ok(());
+    }
 
-    let _ = Command::new(herdr_bin)
-        .args(["notification", "show", "${opts.name}", "--body", "Action executed from Rust!"])
-        .status();
+    // Interactive Ratatui Popup Mode
+    enable_raw_mode()?;
+    let mut stdout = stdout();
+    execute!(stdout, EnterAlternateScreen)?;
+    let backend = CrosstermBackend::new(stdout);
+    let mut terminal = Terminal::new(backend)?;
+
+    loop {
+        terminal.draw(|f| {
+            let area = f.area();
+            let block = Block::bordered()
+                .title(" ${opts.name} (Press 'q' to exit) ")
+                .border_style(Style::default().fg(Color::Cyan));
+            let content = Paragraph::new(format!("Host Pane: {}\\nReady for agent operations.", pane_id))
+                .block(block);
+
+            f.render_widget(Clear, area);
+            f.render_widget(content, area);
+        })?;
+
+        if let Event::Key(key) = event::read()? {
+            if key.code == KeyCode::Char('q') || key.code == KeyCode::Esc {
+                break;
+            }
+        }
+    }
+
+    disable_raw_mode()?;
+    execute!(terminal.backend_mut(), LeaveAlternateScreen)?;
+    terminal.show_cursor()?;
+    Ok(())
 }
 `;
   fs.writeFileSync(path.join(srcDir, "main.rs"), mainRs, "utf8");
