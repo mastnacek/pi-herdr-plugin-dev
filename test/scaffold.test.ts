@@ -64,6 +64,12 @@ test("scaffoldHerdrPlugin creates Rust, TypeScript and Bash plugins", () => {
     assert.ok(fs.existsSync(path.join(rustTarget, "herdr-plugin.toml")));
     assert.ok(fs.existsSync(path.join(rustTarget, "Cargo.toml")));
     assert.ok(fs.existsSync(path.join(rustTarget, "src", "main.rs")));
+    assert.ok(fs.existsSync(path.join(rustTarget, "src", "shared", "mod.rs")));
+    assert.ok(fs.existsSync(path.join(rustTarget, "src", "shared", "client.rs")));
+    assert.ok(fs.existsSync(path.join(rustTarget, "src", "shared", "context.rs")));
+    assert.ok(fs.existsSync(path.join(rustTarget, "src", "slices", "mod.rs")));
+    assert.ok(fs.existsSync(path.join(rustTarget, "src", "slices", "dashboard", "mod.rs")));
+    assert.ok(fs.existsSync(path.join(rustTarget, "src", "slices", "notify", "mod.rs")));
     assert.ok(rustRes.filesCreated.includes("src/main.rs"));
 
     // 3. Bash
