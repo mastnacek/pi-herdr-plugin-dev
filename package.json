@@ -1,0 +1,52 @@
+{
+  "name": "pi-herdr-plugin-dev",
+  "version": "0.1.0",
+  "description": "Pi agent skill and tools for authoring, scaffolding, and testing Herdr plugins in Rust, TypeScript, and Bash.",
+  "type": "module",
+  "license": "MIT",
+  "author": "mastnacek",
+  "homepage": "https://github.com/mastnacek/pi-herdr-plugin-dev#readme",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/mastnacek/pi-herdr-plugin-dev.git"
+  },
+  "bugs": {
+    "url": "https://github.com/mastnacek/pi-herdr-plugin-dev/issues"
+  },
+  "keywords": [
+    "pi-package",
+    "pi",
+    "pi-extension",
+    "pi-skill",
+    "herdr",
+    "herdr-plugin",
+    "multiplexer"
+  ],
+  "files": [
+    "index.ts",
+    "src",
+    "skills",
+    "docs",
+    "README.md",
+    "LICENSE"
+  ],
+  "scripts": {
+    "check": "tsc --noEmit",
+    "test": "node --test dist/test/*.test.js"
+  },
+  "pi": {
+    "extensions": [
+      "./index.ts"
+    ],
+    "skills": [
+      "./skills/herdr-plugin-dev"
+    ]
+  },
+  "peerDependencies": {
+    "@earendil-works/pi-ai": "*",
+    "@earendil-works/pi-agent-core": "*",
+    "@earendil-works/pi-coding-agent": "*",
+    "@earendil-works/pi-tui": "*",
+    "typebox": "*"
+  }
+}
