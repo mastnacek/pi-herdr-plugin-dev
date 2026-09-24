@@ -3,101 +3,29 @@ import { StringEnum } from "@earendil-works/pi-ai";
 import { Type } from "typebox";
 import fs from "node:fs";
 import path from "node:path";
-import { checkFileLines, formatLineLimitCheck } from "./src/line-monitor.js";
-import {
-  buildHerdrDocsGateReason,
-  isGatedHerdrEditTarget,
-  isHerdrDocsPath,
-} from "./src/source-gate.js";
+import { registerGuardHooks } from "./src/hooks/guard-hooks.js";
 import { scaffoldHerdrPlugin, validateHerdrManifest } from "./src/scaffold.js";
 
-/** Hard per-file line limit for monitored source files (src/line-monitor.ts). */
-const MAX_FILE_LINES = 400;
-
-export default function (pi: ExtensionAPI): void {
+/**
+ * pi-herdr-plugin-dev — Pi agent skill and tools for authoring, scaffolding,
+ * and testing Herdr plugins.
+ *
+ * Composition root only: guard hooks (line limit, docs-before-edit) live in
+ * src/hooks/guard-hooks.ts; scaffolding in src/scaffold.ts; gates in
+ * src/source-gate.ts; line limits in src/line-monitor.ts.
+ *
+ * Tools: herdr_scaffold_plugin, herdr_validate_manifest
+ * Command: /herdr-plugin [scaffold|validate|docs]
+ */
+export default function herdrPluginDevExtension(pi: ExtensionAPI): void {
   /** Unsubscribers from every `pi.on()`; drained on session_shutdown. */
   const unsubscribers: Array<() => void> = [];
   const track = (result: unknown): void => {
     if (typeof result === "function") unsubscribers.push(result as () => void);
   };
 
-  // 0. Source file line limit — prompt guideline + edit/write rejection
-  track(
-    pi.on("before_agent_start", (event) => {
-      if (!event.systemPromptOptions?.promptGuidelines) return;
-      event.systemPromptOptions.promptGuidelines.push(
-        `SOURCE FILE LENGTH LIMIT: Source code files (.ts, .js, .rs, .go, .py, …) must stay at or below ${MAX_FILE_LINES} lines ` +
-          `(soft target ${Math.floor(MAX_FILE_LINES * 0.75)}). If an edit or write is rejected with '[Line limit exceeded]', ` +
-          "do NOT retry the same file unchanged — extract cohesive sections (classes, function groups, constants, types) " +
-          "into new modules in the same folder and import them, then re-run the edit.",
-      );
-      event.systemPromptOptions.promptGuidelines.push(
-        "HERDR DOCS BEFORE EDIT (ENFORCED): when editing source files inside a Herdr plugin project (directory with herdr-plugin.toml), " +
-          "the edit is rejected until the Herdr documentation has been read this session — " +
-          "the herdr-plugin-dev skill (SKILL.md) or the bundled 'docs/herdr/*.md'. If an edit is rejected with " +
-          "'HERDR DOCS BEFORE EDIT', read the docs first, then retry.",
-      );
-    }),
-  );
+  registerGuardHooks(pi, track);
 
-  /** True once bundled Herdr docs were read this session (docs gate state). */
-  let herdrDocsRead = false;
-
-  track(
-    pi.on("session_start", () => {
-      herdrDocsRead = false; // new session → docs gate re-arms
-    }),
-  );
-
-  // 0b. Consult-before-edit gate — Herdr docs must be read before editing plugin source
-  track(
-    pi.on("tool_call", (event) => {
-      const rawName = event.toolName || "";
-      const baseToolName = rawName.includes("__") ? rawName.split("__").pop()! : rawName;
-      const input = event.input as { path?: string; file?: string } | undefined;
-      const docPath =
-        typeof input?.path === "string" ? input.path : typeof input?.file === "string" ? input.file : undefined;
-
-      // Record doc reads from any read-ish tool before any early return.
-      if (docPath && baseToolName !== "edit" && baseToolName !== "write" && isHerdrDocsPath(path.resolve(docPath))) {
-        herdrDocsRead = true;
-      }
-
-      if (baseToolName !== "edit" && baseToolName !== "write") return;
-      if (herdrDocsRead) return;
-
-      const targetPath = docPath;
-      if (!targetPath) return;
-      const resolved = path.resolve(targetPath);
-      if (!isGatedHerdrEditTarget(resolved)) return;
-
-      return { block: true, reason: buildHerdrDocsGateReason(resolved) };
-    }),
-  );
-
-  track(
-    pi.on("tool_result", (event) => {
-      const rawName = event.toolName || "";
-      const baseToolName = rawName.includes("__") ? rawName.split("__").pop()! : rawName;
-      if (baseToolName !== "edit" && baseToolName !== "write") return;
-      if (event.isError) return;
-
-      const targetPath = (event.input as { path?: string } | undefined)?.path;
-      if (!targetPath) return;
-
-      const check = checkFileLines(path.resolve(targetPath), MAX_FILE_LINES);
-      const notice = formatLineLimitCheck(check);
-      if (!notice) return;
-
-      if (check.level === "exceeded") {
-        return {
-          content: [...event.content, { type: "text", text: notice }],
-          isError: true,
-        };
-      }
-      return { content: [...event.content, { type: "text", text: notice }] };
-    }),
-  );
   // 1. Tool: herdr_scaffold_plugin
   pi.registerTool({
     name: "herdr_scaffold_plugin",
