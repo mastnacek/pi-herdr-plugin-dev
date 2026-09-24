@@ -3,9 +3,55 @@ import { StringEnum } from "@earendil-works/pi-ai";
 import { Type } from "typebox";
 import fs from "node:fs";
 import path from "node:path";
+import { checkFileLines, formatLineLimitCheck } from "./src/line-monitor.js";
 import { scaffoldHerdrPlugin, validateHerdrManifest } from "./src/scaffold.js";
 
+/** Hard per-file line limit for monitored source files (src/line-monitor.ts). */
+const MAX_FILE_LINES = 400;
+
 export default function (pi: ExtensionAPI): void {
+  /** Unsubscribers from every `pi.on()`; drained on session_shutdown. */
+  const unsubscribers: Array<() => void> = [];
+  const track = (result: unknown): void => {
+    if (typeof result === "function") unsubscribers.push(result as () => void);
+  };
+
+  // 0. Source file line limit — prompt guideline + edit/write rejection
+  track(
+    pi.on("before_agent_start", (event) => {
+      if (!event.systemPromptOptions?.promptGuidelines) return;
+      event.systemPromptOptions.promptGuidelines.push(
+        `SOURCE FILE LENGTH LIMIT: Source code files (.ts, .js, .rs, .go, .py, …) must stay at or below ${MAX_FILE_LINES} lines ` +
+          `(soft target ${Math.floor(MAX_FILE_LINES * 0.75)}). If an edit or write is rejected with '[Line limit exceeded]', ` +
+          "do NOT retry the same file unchanged — extract cohesive sections (classes, function groups, constants, types) " +
+          "into new modules in the same folder and import them, then re-run the edit.",
+      );
+    }),
+  );
+
+  track(
+    pi.on("tool_result", (event) => {
+      const rawName = event.toolName || "";
+      const baseToolName = rawName.includes("__") ? rawName.split("__").pop()! : rawName;
+      if (baseToolName !== "edit" && baseToolName !== "write") return;
+      if (event.isError) return;
+
+      const targetPath = (event.input as { path?: string } | undefined)?.path;
+      if (!targetPath) return;
+
+      const check = checkFileLines(path.resolve(targetPath), MAX_FILE_LINES);
+      const notice = formatLineLimitCheck(check);
+      if (!notice) return;
+
+      if (check.level === "exceeded") {
+        return {
+          content: [...event.content, { type: "text", text: notice }],
+          isError: true,
+        };
+      }
+      return { content: [...event.content, { type: "text", text: notice }] };
+    }),
+  );
   // 1. Tool: herdr_scaffold_plugin
   pi.registerTool({
     name: "herdr_scaffold_plugin",
@@ -193,5 +239,12 @@ export default function (pi: ExtensionAPI): void {
         ctx.ui.notify("Usage: /herdr-plugin scaffold <rust|typescript|bash> [dir] [id] | validate | docs", "info");
       }
     },
+  });
+
+  // Lifecycle: release listeners so /reload cannot accumulate duplicates.
+  pi.on("session_shutdown", () => {
+    while (unsubscribers.length > 0) {
+      unsubscribers.pop()?.();
+    }
   });
 }

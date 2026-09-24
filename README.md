@@ -12,6 +12,7 @@ Pi Agent extension and skill for authoring, scaffolding, testing, and debugging 
   - `/herdr-plugin scaffold <rust|typescript|bash>`
   - `/herdr-plugin validate`
   - `/herdr-plugin docs`
+- **Per-File Line Limit Monitor:** Source files edited via `edit`/`write` are checked against a hard limit (400 lines, soft advisory at 300). Oversized files are rejected with mandatory split instructions so the agent must decompose them logically. Dependency/build/lock files are exempt.
 - **Offline Herdr Documentation**: Bundled under `docs/herdr/` (plugins, CLI reference, socket API).
 
 ## Installation
