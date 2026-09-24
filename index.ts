@@ -4,6 +4,11 @@ import { Type } from "typebox";
 import fs from "node:fs";
 import path from "node:path";
 import { checkFileLines, formatLineLimitCheck } from "./src/line-monitor.js";
+import {
+  buildHerdrDocsGateReason,
+  isGatedHerdrEditTarget,
+  isHerdrDocsPath,
+} from "./src/source-gate.js";
 import { scaffoldHerdrPlugin, validateHerdrManifest } from "./src/scaffold.js";
 
 /** Hard per-file line limit for monitored source files (src/line-monitor.ts). */
@@ -26,6 +31,47 @@ export default function (pi: ExtensionAPI): void {
           "do NOT retry the same file unchanged — extract cohesive sections (classes, function groups, constants, types) " +
           "into new modules in the same folder and import them, then re-run the edit.",
       );
+      event.systemPromptOptions.promptGuidelines.push(
+        "HERDR DOCS BEFORE EDIT (ENFORCED): when editing source files inside a Herdr plugin project (directory with herdr-plugin.toml), " +
+          "the edit is rejected until the Herdr documentation has been read this session — " +
+          "the herdr-plugin-dev skill (SKILL.md) or the bundled 'docs/herdr/*.md'. If an edit is rejected with " +
+          "'HERDR DOCS BEFORE EDIT', read the docs first, then retry.",
+      );
+    }),
+  );
+
+  /** True once bundled Herdr docs were read this session (docs gate state). */
+  let herdrDocsRead = false;
+
+  track(
+    pi.on("session_start", () => {
+      herdrDocsRead = false; // new session → docs gate re-arms
+    }),
+  );
+
+  // 0b. Consult-before-edit gate — Herdr docs must be read before editing plugin source
+  track(
+    pi.on("tool_call", (event) => {
+      const rawName = event.toolName || "";
+      const baseToolName = rawName.includes("__") ? rawName.split("__").pop()! : rawName;
+      const input = event.input as { path?: string; file?: string } | undefined;
+      const docPath =
+        typeof input?.path === "string" ? input.path : typeof input?.file === "string" ? input.file : undefined;
+
+      // Record doc reads from any read-ish tool before any early return.
+      if (docPath && baseToolName !== "edit" && baseToolName !== "write" && isHerdrDocsPath(path.resolve(docPath))) {
+        herdrDocsRead = true;
+      }
+
+      if (baseToolName !== "edit" && baseToolName !== "write") return;
+      if (herdrDocsRead) return;
+
+      const targetPath = docPath;
+      if (!targetPath) return;
+      const resolved = path.resolve(targetPath);
+      if (!isGatedHerdrEditTarget(resolved)) return;
+
+      return { block: true, reason: buildHerdrDocsGateReason(resolved) };
     }),
   );
 
